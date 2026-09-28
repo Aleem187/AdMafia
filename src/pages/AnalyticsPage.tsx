@@ -1,0 +1,314 @@
+import { useEffect, useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/lib/auth';
+import { supabase } from '@/lib/supabase';
+import { PLATFORM_LABELS, PLATFORM_COLORS } from '@/lib/mock';
+import type { PublishedAd, AdAccount, AdPerformance, Platform } from '@/lib/types';
+import AppLayout from '@/components/AppLayout';
+
+type DateRange = '7d' | '14d' | '30d';
+
+export default function AnalyticsPage() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const [ads, setAds] = useState<PublishedAd[]>([]);
+  const [accounts, setAccounts] = useState<AdAccount[]>([]);
+  const [performance, setPerformance] = useState<AdPerformance[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [platformFilter, setPlatformFilter] = useState<Platform | 'all'>('all');
+  const [dateRange, setDateRange] = useState<DateRange>('14d');
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  async function loadData() {
+    if (!user) return;
+    const [{ data: adData }, { data: accData }, { data: perfData }] = await Promise.all([
+      supabase.from('published_ads').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+      supabase.from('ad_accounts').select('*').eq('user_id', user.id),
+      supabase.from('ad_performance').select('*').eq('user_id', user.id).order('date', { ascending: true }),
+    ]);
+    setAds((adData as PublishedAd[]) ?? []);
+    setAccounts((accData as AdAccount[]) ?? []);
+    setPerformance((perfData as AdPerformance[]) ?? []);
+    setLoading(false);
+  }
+
+  const days = dateRange === '7d' ? 7 : dateRange === '14d' ? 14 : 30;
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - days);
+  const cutoffStr = cutoffDate.toISOString().split('T')[0];
+
+  // Filter ads by platform
+  const filteredAds = useMemo(() => {
+    if (platformFilter === 'all') return ads;
+    const accountIds = accounts.filter((a) => a.platform === platformFilter).map((a) => a.id);
+    return ads.filter((ad) => accountIds.includes(ad.ad_account_id ?? ''));
+  }, [ads, accounts, platformFilter]);
+
+  // Filter performance by date range and platform
+  const filteredPerf = useMemo(() => {
+    let perf = performance.filter((p) => p.date >= cutoffStr);
+    if (platformFilter !== 'all') {
+      const accountIds = accounts.filter((a) => a.platform === platformFilter).map((a) => a.id);
+      const adIds = ads.filter((ad) => accountIds.includes(ad.ad_account_id ?? '')).map((ad) => ad.id);
+      perf = perf.filter((p) => adIds.includes(p.published_ad_id));
+    }
+    return perf;
+  }, [performance, ads, accounts, platformFilter, cutoffStr]);
+
+  // Aggregate by date for chart
+  const chartData = useMemo(() => {
+    const byDate = new Map<string, { spend: number; revenue: number; clicks: number; impressions: number; conversions: number }>();
+    for (const p of filteredPerf) {
+      const existing = byDate.get(p.date) ?? { spend: 0, revenue: 0, clicks: 0, impressions: 0, conversions: 0 };
+      existing.spend += Number(p.spend);
+      existing.revenue += Number(p.revenue);
+      existing.clicks += p.clicks;
+      existing.impressions += p.impressions;
+      existing.conversions += p.conversions;
+      byDate.set(p.date, existing);
+    }
+    return Array.from(byDate.entries()).map(([date, v]) => ({ date, ...v }));
+  }, [filteredPerf]);
+
+  // Aggregate metrics
+  const totals = useMemo(() => {
+    const spend = chartData.reduce((s, d) => s + d.spend, 0);
+    const clicks = chartData.reduce((s, d) => s + d.clicks, 0);
+    const impressions = chartData.reduce((s, d) => s + d.impressions, 0);
+    const conversions = chartData.reduce((s, d) => s + d.conversions, 0);
+    const revenue = chartData.reduce((s, d) => s + d.revenue, 0);
+    const roas = spend > 0 ? revenue / spend : 0;
+    const cpc = clicks > 0 ? spend / clicks : 0;
+    const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+    const cvr = clicks > 0 ? (conversions / clicks) * 100 : 0;
+    return { spend, clicks, impressions, conversions, revenue, roas, cpc, ctr, cvr };
+  }, [chartData]);
+
+  // Per-ad performance
+  const adPerformanceMap = useMemo(() => {
+    const byAd = new Map<string, { spend: number; revenue: number; clicks: number; conversions: number }>();
+    for (const p of filteredPerf) {
+      const existing = byAd.get(p.published_ad_id) ?? { spend: 0, revenue: 0, clicks: 0, conversions: 0 };
+      existing.spend += Number(p.spend);
+      existing.revenue += Number(p.revenue);
+      existing.clicks += p.clicks;
+      existing.conversions += p.conversions;
+      byAd.set(p.published_ad_id, existing);
+    }
+    return byAd;
+  }, [filteredPerf]);
+
+  const chartMax = Math.max(...chartData.map((d) => Math.max(d.spend, d.revenue)), 1);
+
+  return (
+    <AppLayout>
+      <div className="mx-auto max-w-6xl px-8 py-10">
+        <div className="mb-8 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-gray-900">Analytics Dashboard</h1>
+            <p className="mt-1 text-sm text-gray-500">Cross-platform performance overview for all your published ads.</p>
+          </div>
+          <button
+            onClick={() => navigate('/app/new-run')}
+            className="flex items-center gap-2 rounded-xl bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 transition-colors"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+            New Run
+          </button>
+        </div>
+
+        {/* Filters */}
+        <div className="mb-6 flex flex-wrap items-center gap-3">
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1">
+            {(['all', 'meta', 'google', 'tiktok'] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPlatformFilter(p)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  platformFilter === p ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                {p === 'all' ? 'All Platforms' : PLATFORM_LABELS[p]}
+              </button>
+            ))}
+          </div>
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1">
+            {(['7d', '14d', '30d'] as const).map((r) => (
+              <button
+                key={r}
+                onClick={() => setDateRange(r)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  dateRange === r ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                {r === '7d' ? '7 days' : r === '14d' ? '14 days' : '30 days'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* KPI cards */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard label="Total Spend" value={`$${totals.spend.toFixed(2)}`} sub={`${totals.clicks} clicks`} icon="spend" />
+          <KpiCard label="Revenue" value={`$${totals.revenue.toFixed(2)}`} sub={`${totals.conversions} conversions`} icon="revenue" />
+          <KpiCard label="ROAS" value={`${totals.roas.toFixed(2)}x`} sub={`CPC $${totals.cpc.toFixed(2)}`} icon="roas" />
+          <KpiCard label="CTR" value={`${totals.ctr.toFixed(2)}%`} sub={`CVR ${totals.cvr.toFixed(1)}%`} icon="ctr" />
+        </div>
+
+        {/* Chart */}
+        {chartData.length > 0 && (
+          <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-gray-900">Spend vs Revenue</h2>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-gray-400" /> Spend</span>
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-gray-900" /> Revenue</span>
+              </div>
+            </div>
+            <div className="flex h-48 items-end gap-1">
+              {chartData.map((d) => (
+                <div key={d.date} className="group relative flex flex-1 flex-col items-center justify-end gap-0.5">
+                  <div className="absolute -top-8 hidden rounded-lg bg-gray-900 px-2 py-1 text-[10px] text-white group-hover:block z-10 whitespace-nowrap">
+                    ${d.revenue.toFixed(0)} / ${d.spend.toFixed(0)}
+                  </div>
+                  <div
+                    className="w-full rounded-t-sm bg-gray-900 transition-all"
+                    style={{ height: `${(d.revenue / chartMax) * 100}%` }}
+                  />
+                  <div
+                    className="w-full rounded-t-sm bg-gray-400 transition-all"
+                    style={{ height: `${(d.spend / chartMax) * 100}%` }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 flex justify-between text-[10px] text-gray-400">
+              <span>{chartData[0]?.date}</span>
+              <span>{chartData[chartData.length - 1]?.date}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Ads table */}
+        <div className="mt-6 rounded-2xl border border-gray-200 bg-white overflow-hidden">
+          <div className="border-b border-gray-100 px-6 py-4">
+            <h2 className="text-sm font-semibold text-gray-900">Published Ads ({filteredAds.length})</h2>
+          </div>
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-200 border-t-gray-900" />
+            </div>
+          ) : filteredAds.length === 0 ? (
+            <div className="px-6 py-12 text-center">
+              <p className="text-sm text-gray-400">No published ads yet.</p>
+              <button onClick={() => navigate('/app/new-run')} className="mt-2 text-sm font-medium text-gray-900 hover:underline">
+                Create your first campaign
+              </button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50/50">
+                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Ad</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Platform</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Status</th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Budget</th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Spend</th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Revenue</th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">ROAS</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {filteredAds.map((ad) => {
+                    const account = accounts.find((a) => a.id === ad.ad_account_id);
+                    const adPerf = adPerformanceMap.get(ad.id);
+                    const adSpend = adPerf?.spend ?? 0;
+                    const adRevenue = adPerf?.revenue ?? 0;
+                    const adRoas = adSpend > 0 ? adRevenue / adSpend : 0;
+
+                    return (
+                      <tr key={ad.id} className="hover:bg-gray-50/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            {ad.creative_url && (
+                              <img src={ad.creative_url} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                            )}
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-gray-900">{ad.headline}</p>
+                              <p className="text-xs text-gray-400">{ad.cta}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          {account && (
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="h-6 w-6 rounded-md"
+                                style={{ backgroundColor: PLATFORM_COLORS[account.platform as Platform] }}
+                              />
+                              <span className="text-sm text-gray-600">{PLATFORM_LABELS[account.platform as Platform]}</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+                            ad.status === 'live' ? 'bg-green-50 text-green-700' :
+                            ad.status === 'queued' ? 'bg-blue-50 text-blue-700' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>
+                            <span className={`h-1.5 w-1.5 rounded-full ${
+                              ad.status === 'live' ? 'bg-green-500' :
+                              ad.status === 'queued' ? 'bg-blue-500' : 'bg-gray-400'
+                            }`} />
+                            {ad.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right text-sm text-gray-600">${ad.daily_budget}</td>
+                        <td className="px-6 py-4 text-right text-sm text-gray-600">${adSpend.toFixed(2)}</td>
+                        <td className="px-6 py-4 text-right text-sm font-medium text-gray-900">${adRevenue.toFixed(2)}</td>
+                        <td className="px-6 py-4 text-right text-sm font-semibold text-gray-900">{adRoas.toFixed(2)}x</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </AppLayout>
+  );
+}
+
+function KpiCard({ label, value, sub, icon }: { label: string; value: string; sub: string; icon: string }) {
+  const iconColors: Record<string, string> = {
+    spend: 'bg-blue-50 text-blue-600',
+    revenue: 'bg-green-50 text-green-600',
+    roas: 'bg-purple-50 text-purple-600',
+    ctr: 'bg-amber-50 text-amber-600',
+  };
+  const iconPaths: Record<string, string> = {
+    spend: 'M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6',
+    revenue: 'M3 3v18h18M7 14l4-4 4 4 6-6',
+    roas: 'M13 2L3 14h9l-1 8 10-12h-9l1-8z',
+    ctr: 'M3 3v18h18M7 16V8M12 16v-5M17 16v-2',
+  };
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-5">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{label}</p>
+        <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconColors[icon]}`}>
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d={iconPaths[icon]} />
+          </svg>
+        </div>
+      </div>
+      <p className="mt-3 text-2xl font-bold tracking-tight text-gray-900">{value}</p>
+      <p className="mt-1 text-xs text-gray-400">{sub}</p>
+    </div>
+  );
+}
