@@ -1,3 +1,8 @@
 supabase/.temp/
 supabase/functions/.env*
 *.env
+node_modules
+dist
+.env.*
+!.env.example
+supabase/.branches
