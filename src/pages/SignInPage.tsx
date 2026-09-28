@@ -101,6 +101,12 @@ export default function SignInPage() {
             <Link to="/signup" className="font-medium text-gray-900 hover:underline">Sign up</Link>
           </p>
         </div>
+
+        <div className="mt-6 flex justify-center gap-4 text-xs text-gray-400">
+          <Link to="/privacy" className="hover:text-gray-600 transition-colors">Privacy</Link>
+          <Link to="/terms" className="hover:text-gray-600 transition-colors">Terms</Link>
+          <Link to="/data-deletion" className="hover:text-gray-600 transition-colors">Data Deletion</Link>
+        </div>
       </div>
     </div>
   );

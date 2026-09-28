@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PLANS, PLAN_LIST } from '@/lib/plans';
+import { PLAN_LIST } from '@/lib/plans';
 import { useAuth } from '@/lib/auth';
 
 export default function LandingPage() {
@@ -229,8 +229,9 @@ export default function LandingPage() {
           </div>
           <p className="text-sm text-gray-400">© 2026 AdMafia. All rights reserved.</p>
           <div className="flex gap-6 text-sm text-gray-500">
-            <a href="#" className="hover:text-gray-900 transition-colors">Privacy</a>
-            <a href="#" className="hover:text-gray-900 transition-colors">Terms</a>
+            <Link to="/privacy" className="hover:text-gray-900 transition-colors">Privacy</Link>
+            <Link to="/terms" className="hover:text-gray-900 transition-colors">Terms</Link>
+            <Link to="/data-deletion" className="hover:text-gray-900 transition-colors">Data Deletion</Link>
             <a href="#" className="hover:text-gray-900 transition-colors">Contact</a>
           </div>
         </div>

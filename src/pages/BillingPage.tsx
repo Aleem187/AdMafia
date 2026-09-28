@@ -1,16 +1,35 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
+import { deleteAccount } from '@/lib/api';
 import { PLANS, PLAN_LIST } from '@/lib/plans';
 import type { Plan } from '@/lib/types';
 import AppLayout from '@/components/AppLayout';
 
 export default function BillingPage() {
-  const { user, subscription, refreshSubscription } = useAuth();
+  const { user, subscription, signOut, refreshSubscription } = useAuth();
   const navigate = useNavigate();
   const [changingPlan, setChangingPlan] = useState<Plan | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleDeleteAccount() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteAccount();
+      await signOut();
+      navigate('/');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete account.';
+      setDeleteError(message);
+      setDeleting(false);
+    }
+  }
 
   const currentPlan = subscription ? PLANS[subscription.plan] : PLANS.starter;
   const usagePct = currentPlan.maxGenerations > 0
@@ -194,6 +213,74 @@ export default function BillingPage() {
               </tr>
             </tbody>
           </table>
+        </div>
+
+        {/* Danger zone */}
+        <h2 className="mb-4 mt-8 text-lg font-semibold text-gray-900">Danger Zone</h2>
+        <div className="rounded-2xl border border-red-200 bg-red-50/40 p-6">
+          {!showDeleteConfirm ? (
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Delete my account and data</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Permanently deletes your account, ad platform connections, campaign briefs, generated creative,
+                  published-ad history, products, and uploaded/generated files. This cannot be undone. See our{' '}
+                  <a href="/data-deletion" target="_blank" rel="noreferrer" className="underline hover:text-gray-900">
+                    Data Deletion
+                  </a>{' '}
+                  page for exactly what's removed.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="flex-shrink-0 rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100"
+              >
+                Delete account
+              </button>
+            </div>
+          ) : (
+            <div>
+              <p className="text-sm font-medium text-red-900">This is permanent and cannot be undone.</p>
+              <p className="mt-1 text-xs text-red-700">
+                Type <span className="font-mono font-semibold">DELETE</span> below to confirm you want to permanently
+                delete your account and all associated data.
+              </p>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                placeholder="Type DELETE to confirm"
+                className="mt-3 w-full max-w-xs rounded-lg border border-red-200 px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-red-500 focus:ring-1 focus:ring-red-500"
+              />
+              {deleteError && (
+                <p className="mt-2 text-xs text-red-700">{deleteError}</p>
+              )}
+              <div className="mt-4 flex gap-3">
+                <button
+                  onClick={handleDeleteAccount}
+                  disabled={deleteConfirmText !== 'DELETE' || deleting}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                    deleteConfirmText !== 'DELETE' || deleting
+                      ? 'cursor-not-allowed bg-gray-100 text-gray-400'
+                      : 'bg-red-600 text-white hover:bg-red-700'
+                  }`}
+                >
+                  {deleting ? 'Deleting...' : 'Permanently delete my account'}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDeleteConfirm(false);
+                    setDeleteConfirmText('');
+                    setDeleteError(null);
+                  }}
+                  disabled={deleting}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-white transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </AppLayout>

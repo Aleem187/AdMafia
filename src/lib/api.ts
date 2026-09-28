@@ -191,3 +191,31 @@ export async function syncPerformance(userId: string): Promise<{ synced: number 
   if (data.error) throw new Error(data.error);
   return { synced: data.synced ?? 0 };
 }
+
+// Permanently deletes the caller's own account: platform connections,
+// campaign briefs, generations, published ads, performance history,
+// products, uploaded/generated storage files, and the auth user itself.
+// See supabase/functions/delete-account.
+export async function deleteAccount(): Promise<void> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+  if (!token) throw new Error('Not authenticated');
+
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/delete-account`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+    },
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Account deletion failed (${response.status}): ${errBody}`);
+  }
+
+  const data = await response.json();
+  if (data.error) throw new Error(data.error);
+}

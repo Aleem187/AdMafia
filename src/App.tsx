@@ -5,6 +5,9 @@ import LandingPage from '@/pages/LandingPage';
 import SignUpPage from '@/pages/SignUpPage';
 import SignInPage from '@/pages/SignInPage';
 import OnboardingPage from '@/pages/OnboardingPage';
+import PrivacyPage from '@/pages/PrivacyPage';
+import TermsPage from '@/pages/TermsPage';
+import DataDeletionPage from '@/pages/DataDeletionPage';
 import DashboardPage from '@/pages/DashboardPage';
 import ConnectionsPage from '@/pages/ConnectionsPage';
 import ProductsPage from '@/pages/ProductsPage';
@@ -34,6 +37,9 @@ function AppRoutes() {
       <Route path="/signup" element={<SignUpPage />} />
       <Route path="/signin" element={<SignInPage />} />
       <Route path="/onboarding" element={<OnboardingPage />} />
+      <Route path="/privacy" element={<PrivacyPage />} />
+      <Route path="/terms" element={<TermsPage />} />
+      <Route path="/data-deletion" element={<DataDeletionPage />} />
       <Route path="/app" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/app/connections" element={<ProtectedRoute><ConnectionsPage /></ProtectedRoute>} />
       <Route path="/app/products" element={<ProtectedRoute><ProductsPage /></ProtectedRoute>} />
