@@ -90,6 +90,47 @@ function buildImageGenPrompt(subject: string, styleIndex: number): string {
   return `A professional product photo of ${subject}, ${style}, commercial advertising style, high quality, photorealistic. No text, no logos, no watermarks.`;
 }
 
+// Four distinct treatments for a software/digital-service subject — UI
+// mockups and abstract tech visuals, never physical-object photography.
+const DIGITAL_VARIANT_STYLES = [
+  "a clean SaaS dashboard UI mockup shown on a modern laptop or monitor screen, soft gradient background, flat design",
+  "an abstract 3D isometric illustration of connected software/cloud/network elements, vibrant modern tech color palette",
+  "a modern web app or website interface mockup shown across a tablet and phone side by side, minimalist UI design",
+  "an abstract digital data-visualization graphic — glowing lines, nodes, and code-like elements on a dark tech background",
+];
+
+// Used instead of buildImageGenPrompt() when the campaign is for software,
+// a website, an app, or another digital/non-physical product or service.
+// Image models default to generic bottles/boxes/packaging for an ambiguous
+// "product photo" prompt, since that's the dominant training association for
+// the word "product" — this template and its explicit negative constraints
+// exist specifically to prevent that for non-physical offerings.
+function buildDigitalImageGenPrompt(subject: string, styleIndex: number): string {
+  const style = DIGITAL_VARIANT_STYLES[styleIndex % DIGITAL_VARIANT_STYLES.length];
+  return `Professional tech marketing artwork representing ${subject}: ${style}. Sleek modern SaaS/software visual design, clean UI and abstract digital elements, professional tech branding style, high quality. STRICTLY do not depict any physical object — no bottles, jars, boxes, packaging, supplements, pills, or any tangible real-world product of any kind, and no hands holding a physical item. This must be a purely digital/software/UI/abstract-tech visual, not a product photograph. No added text, no logos, no watermarks.`;
+}
+
+// Best-effort, keyword-based classification used only when OpenAI's own
+// classification (below) isn't available — e.g. no API key configured.
+function guessProductKind(...texts: Array<string | undefined>): "physical" | "digital" {
+  const combined = texts.filter(Boolean).join(" ");
+  const digitalHints = /\b(software|saas|web ?app|webapp|website|web ?development|web ?design|web ?dev|platform|dashboard|\bapi\b|application|digital product|online service|mobile app|ios app|android app|developer|coding|programming|app development|cloud service|subscription service|plugin|extension|CRM|ERP)\b/i;
+  return digitalHints.test(combined) ? "digital" : "physical";
+}
+
+// Hard, deterministic override: if the brief, product link(s), or asset
+// filenames contain any of these words, ALWAYS use the digital image prompt
+// — regardless of what the AI classification above returned (it's a soft
+// signal and can misclassify, or return a value that doesn't exactly match
+// the strict "physical" | "digital" check). This takes priority over both
+// the AI's productKind and the guessProductKind() fallback.
+const FORCE_DIGITAL_PATTERN = /\b(wordpress|website|web ?development|web ?design|web ?dev|saas|app|service)\b/i;
+
+function shouldForceDigital(...texts: Array<string | undefined>): boolean {
+  const combined = texts.filter(Boolean).join(" ");
+  return FORCE_DIGITAL_PATTERN.test(combined);
+}
+
 // Same 4 style treatments, but as an instruction to change only the scene
 // around an existing product photo — used with the images/edits endpoint,
 // which is given the real photo and must leave the product itself untouched.
@@ -290,6 +331,9 @@ serve(async (req: Request) => {
     // by the model from the brief, not sliced from the raw text, so it's
     // right regardless of where in the brief the product is mentioned.
     let imageSearchQuery: string | null = null;
+    // Whether the image step should render a physical product photo or a
+    // software/digital visual — set from the model's classification below.
+    let productKind: "physical" | "digital" | null = null;
 
     if (openaiKey) {
       const platformList = platforms?.length
@@ -304,9 +348,10 @@ Strict factual rules — the copy must be based strictly on what is actually pro
 - Never include a raw URL in "headline", "body", or "cta".
 - If the brief is vague or missing a detail (e.g. no stated discount), do not fill the gap with generic marketing filler — write persuasive copy from only what's actually there.
 
-Respond with a single JSON object with exactly two fields:
+Respond with a single JSON object with exactly three fields:
 - "copyVariants": an array of 4 objects, each with "headline" (bold, attention-grabbing, max 60 chars), "body" (persuasive, max 150 chars), and "cta" (clear call-to-action, 2-4 words). Make each variant different in angle, tone, and approach. Optimize for the target platforms: ${platformList}.
-- "imageSearchQuery": a short (2-5 word) phrase naming ONLY the physical product or subject being advertised, using its exact name if one is given (e.g. "Rhino Hanger tactical hanger", "eco water bottle") — concrete and visual, never the offer, audience, tone, or marketing language.
+- "imageSearchQuery": a short (2-5 word) phrase naming ONLY the product, service, or subject being advertised, using its exact name if one is given (e.g. "Rhino Hanger tactical hanger", "eco water bottle", "TaskFlow project management app") — concrete and visual, never the offer, audience, tone, or marketing language.
+- "productKind": "physical" if what's being advertised is a tangible physical object (something you could photograph on a table), or "digital" if it's software, a website, an app, a SaaS platform, a web design/development service, or any other non-physical digital offering.
 
 Respond ONLY with that JSON object. No markdown, no explanation.`;
 
@@ -377,6 +422,9 @@ Respond ONLY with that JSON object. No markdown, no explanation.`;
           if (!Array.isArray(parsed) && typeof parsed?.imageSearchQuery === "string" && parsed.imageSearchQuery.trim()) {
             imageSearchQuery = parsed.imageSearchQuery.trim();
           }
+          if (!Array.isArray(parsed) && (parsed?.productKind === "physical" || parsed?.productKind === "digital")) {
+            productKind = parsed.productKind;
+          }
         }
       } else {
         // Previously silent — a failure here (bad key, no credits, rate limit)
@@ -421,14 +469,28 @@ Respond ONLY with that JSON object. No markdown, no explanation.`;
     // are unchanged either way.
     let creativeUrls: string[] = [];
     const sourceImageUrl = imageUrls?.[0];
+    // A forced-digital brief (WordPress/website/SaaS/app/service — see
+    // shouldForceDigital above) must NEVER go through the edit path: an
+    // uploaded image there could be a stale or unrelated photo (e.g. a
+    // leftover physical-product shot from an earlier run), and editing it
+    // would preserve exactly the wrong subject. Digital briefs always
+    // generate a fresh UI/tech visual from text instead, uploaded image or not.
+    const forceDigital = shouldForceDigital(prompt, ...(productUrls ?? []), ...(assetNames ?? []));
+    const useEditPath = Boolean(sourceImageUrl) && !forceDigital;
 
     if (openaiKey) {
       const results = await Promise.allSettled(
-        sourceImageUrl
-          ? [0, 1, 2, 3].map((i) => editProductImage(supabase, publicBaseUrl, supabaseUrl, openaiKey, sourceImageUrl, buildEditPrompt(i)))
+        useEditPath
+          ? [0, 1, 2, 3].map((i) => editProductImage(supabase, publicBaseUrl, supabaseUrl, openaiKey, sourceImageUrl!, buildEditPrompt(i)))
           : [0, 1, 2, 3].map((i) => {
               const subject = imageSearchQuery || buildFallbackImageQuery(prompt, assetNames, productUrls);
-              return generateProductImage(supabase, publicBaseUrl, openaiKey, buildImageGenPrompt(subject, i));
+              const kind = forceDigital
+                ? "digital"
+                : productKind ?? guessProductKind(prompt, ...(productUrls ?? []), ...(assetNames ?? []));
+              const imagePrompt = kind === "digital"
+                ? buildDigitalImageGenPrompt(subject, i)
+                : buildImageGenPrompt(subject, i);
+              return generateProductImage(supabase, publicBaseUrl, openaiKey, imagePrompt);
             })
       );
 
@@ -436,7 +498,7 @@ Respond ONLY with that JSON object. No markdown, no explanation.`;
         if (result.status === "fulfilled") return result.value;
         // Rate limit, content policy rejection, storage failure, etc. —
         // isolate to this one slot instead of failing the whole request.
-        console.error(`Image ${sourceImageUrl ? "edit" : "generation"} failed for variant ${i}:`, result.reason instanceof Error ? result.reason.message : result.reason);
+        console.error(`Image ${useEditPath ? "edit" : "generation"} failed for variant ${i}:`, result.reason instanceof Error ? result.reason.message : result.reason);
         return placeholderCreative("Image unavailable");
       });
     } else {

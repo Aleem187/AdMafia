@@ -222,18 +222,29 @@ async function refreshToken(platform: string, refreshToken: string): Promise<str
 }
 
 async function publishToMeta(accessToken: string, accountId: string, copy: { headline: string; body: string; cta: string }, creative: string, dailyBudget: number): Promise<string> {
-  // Create a campaign
+  // Create a campaign. Form-encoded, not a JSON body — this is the classic,
+  // universally-documented shape Meta's own SDKs use for the Marketing API,
+  // and the one place a plain JSON body plus a native array for
+  // special_ad_categories kept throwing (#100) "special_ad_categories is
+  // required" regardless of how that one field was encoded.
+  const campaignParams = new URLSearchParams();
+  campaignParams.append("name", copy.headline);
+  campaignParams.append("objective", "OUTCOME_ENGAGEMENT");
+  campaignParams.append("status", "PAUSED");
+  campaignParams.append("daily_budget", String(Math.round(dailyBudget * 100)));
+  campaignParams.append("buying_type", "AUCTION");
+  // Meta's Marketing API requires this on every campaign, regardless of
+  // objective, since its Special Ad Category policy took effect — it
+  // declares the campaign as NOT a housing/employment/credit/social-issue ad,
+  // the default for ordinary advertisers. Form fields are always strings, so
+  // this is the JSON-encoded array as text, exactly how Meta's own SDKs send it.
+  campaignParams.append("special_ad_categories", JSON.stringify([]));
+  campaignParams.append("access_token", accessToken);
+
   const campaignResponse = await fetch(`https://graph.facebook.com/v19.0/act_${accountId}/campaigns`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: copy.headline,
-      objective: "OUTCOME_ENGAGEMENT",
-      status: "PAUSED",
-      daily_budget: Math.round(dailyBudget * 100),
-      buying_type: "AUCTION",
-      access_token: accessToken,
-    }),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: campaignParams,
   });
   const campaignData = await campaignResponse.json();
   if (campaignData.error) throw new Error(campaignData.error.message);

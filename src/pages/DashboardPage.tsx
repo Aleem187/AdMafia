@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
+import { callPublishAds } from '@/lib/api';
 import { PLANS } from '@/lib/plans';
 import { PLATFORM_LABELS, PLATFORM_COLORS } from '@/lib/mock';
 import type { AdAccount, PublishedAd, AdPerformance, Platform } from '@/lib/types';
@@ -14,10 +15,47 @@ export default function DashboardPage() {
   const [ads, setAds] = useState<PublishedAd[]>([]);
   const [performance, setPerformance] = useState<AdPerformance[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rerunningId, setRerunningId] = useState<string | null>(null);
+  const [rerunMessage, setRerunMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     loadData();
   }, []);
+
+  async function handleRerun(ad: PublishedAd) {
+    if (!user) return;
+    if (!ad.ad_account_id || !ad.creative_url) {
+      setRerunMessage({ type: 'error', text: 'This ad has no ad account or creative to retry with.' });
+      return;
+    }
+
+    setRerunningId(ad.id);
+    setRerunMessage(null);
+    try {
+      // Reuses the exact copy and creative already stored on this ad and
+      // sends it straight to publish-ads, which never calls generate-ads —
+      // no new OpenAI copy or image generation, no AI credits spent.
+      const result = await callPublishAds({
+        generationId: ad.generation_id,
+        userId: user.id,
+        copy: { headline: ad.headline ?? '', body: ad.body ?? '', cta: ad.cta ?? '' },
+        creative: ad.creative_url,
+        accountIds: [ad.ad_account_id],
+        dailyBudget: Number(ad.daily_budget),
+      });
+      if (result.errors?.length) {
+        setRerunMessage({ type: 'error', text: result.errors.join(' ') });
+      } else {
+        setRerunMessage({ type: 'success', text: `Rerun submitted for "${ad.headline}".` });
+      }
+      await loadData();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Rerun failed.';
+      setRerunMessage({ type: 'error', text: message });
+    } finally {
+      setRerunningId(null);
+    }
+  }
 
   async function loadData() {
     if (!user) return;
@@ -166,6 +204,15 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {rerunMessage && (
+          <div className={`mt-6 flex items-start gap-3 rounded-xl px-5 py-4 ${rerunMessage.type === 'success' ? 'bg-green-50' : 'bg-red-50'}`}>
+            <p className={`flex-1 text-sm ${rerunMessage.type === 'success' ? 'text-green-900' : 'text-red-700'}`}>{rerunMessage.text}</p>
+            <button onClick={() => setRerunMessage(null)} className={rerunMessage.type === 'success' ? 'text-green-400 hover:text-green-600' : 'text-red-400 hover:text-red-600'}>
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+            </button>
+          </div>
+        )}
+
         {/* Recent ads */}
         <div className="mt-6 rounded-2xl border border-gray-200 bg-white overflow-hidden">
           <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
@@ -207,6 +254,18 @@ export default function DashboardPage() {
                       </p>
                     </div>
                     <span className="text-sm text-gray-600">${ad.daily_budget}/day</span>
+                    <button
+                      onClick={() => handleRerun(ad)}
+                      disabled={rerunningId === ad.id || !ad.ad_account_id || !ad.creative_url}
+                      title={!ad.ad_account_id || !ad.creative_url ? 'Missing ad account or creative — cannot rerun' : 'Republish this exact ad copy and creative without regenerating it'}
+                      className={`flex-shrink-0 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        rerunningId === ad.id || !ad.ad_account_id || !ad.creative_url
+                          ? 'cursor-not-allowed border-gray-100 text-gray-300'
+                          : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:text-gray-900'
+                      }`}
+                    >
+                      {rerunningId === ad.id ? 'Rerunning...' : 'Rerun'}
+                    </button>
                   </div>
                 );
               })}
